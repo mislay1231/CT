@@ -1,0 +1,95 @@
+package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+// 交换矩阵的两行
+func swapRows(matrix [][]float64, i, j int) {
+	matrix[i], matrix[j] = matrix[j], matrix[i]
+}
+
+// 将第i行乘以一个因子k
+func multiplyRow(matrix [][]float64, i int, k float64) {
+	for j := 0; j < len(matrix[i]); j++ {
+		matrix[i][j] *= k
+	}
+}
+
+// 将第i行加上第j行乘以k
+func addRows(matrix [][]float64, i, j int, k float64) {
+	for col := 0; col < len(matrix[i]); col++ {
+		matrix[i][col] += matrix[j][col] * k
+	}
+}
+
+// 寻找第col列绝对值最大的行，返回行号
+func findMaxRow(matrix [][]float64, col int) int {
+	maxRow := col
+	maxVal := matrix[col][col]
+	for i := col + 1; i < len(matrix); i++ {
+		if abs(matrix[i][col]) > abs(maxVal) {
+			maxRow = i
+			maxVal = matrix[i][col]
+		}
+	}
+	return maxRow
+}
+
+func abs(val float64) float64 {
+	if val < 0 {
+		return -val
+	}
+	return val
+}
+
+// 高斯消元法求解线性方程组
+func gaussianElimination(matrix [][]float64) {
+	var wg sync.WaitGroup
+	numRows := len(matrix)
+	numCols := len(matrix[0])
+
+	// 向前消元
+	for col := 0; col < numRows-1; col++ {
+		maxRow := findMaxRow(matrix, col)
+		if maxRow != col {
+			swapRows(matrix, maxRow, col)
+		}
+		wg.Add(numRows - col - 1)
+		for i := col + 1; i < numRows; i++ {
+			factor := matrix[i][col] / matrix[col][col]
+			go func(row int) {
+				defer wg.Done()
+				addRows(matrix, row, col, -factor)
+			}(i)
+		}
+		wg.Wait()
+	}
+
+	// 回代求解
+	solution := make([]float64, numRows)
+	solution[numRows-1] = matrix[numRows-1][numCols-1] / matrix[numRows-1][numRows-1]
+	for i := numRows - 2; i >= 0; i-- {
+		sum := 0.0
+		for j := i + 1; j < numRows; j++ {
+			sum += matrix[i][j] * solution[j]
+		}
+		solution[i] = (matrix[i][numCols-1] - sum) / matrix[i][i]
+	}
+
+	// 输出结果
+	for i, val := range solution {
+		fmt.Printf("x%d = %.2f\n", i+1, val)
+	}
+}
+
+func main() {
+	// 示例线性方程组的增广矩阵
+	matrix := [][]float64{
+		{2, 1, -1, 8},
+		{-3, -1, 2, -11},
+		{-2, 1, 2, -3},
+	}
+	gaussianElimination(matrix)
+}
