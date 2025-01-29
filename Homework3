@@ -1,0 +1,109 @@
+package main
+
+import (
+	"fmt"
+	"math"
+	"sync"
+)
+
+// 并行计算行列式（使用高斯消元优化）
+func determinant(mat [][]float64) float64 {
+	n := len(mat)
+	det := 1.0
+	temp := make([][]float64, n)
+	for i := range mat {
+		temp[i] = append([]float64{}, mat[i]...)
+	}
+
+	for i := 0; i < n; i++ {
+		maxRow := i
+		for j := i + 1; j < n; j++ {
+			if math.Abs(temp[j][i]) > math.Abs(temp[maxRow][i]) {
+				maxRow = j
+			}
+		}
+
+		if maxRow != i {
+			temp[i], temp[maxRow] = temp[maxRow], temp[i]
+			det *= -1
+		}
+
+		if math.Abs(temp[i][i]) < 1e-9 {
+			return 0
+		}
+
+		for j := i + 1; j < n; j++ {
+			factor := temp[j][i] / temp[i][i]
+			for k := i; k < n; k++ {
+				temp[j][k] -= factor * temp[i][k]
+			}
+		}
+		det *= temp[i][i]
+	}
+	return det
+}
+
+// 创建替换列副本
+func withReplacedColumn(a [][]float64, b []float64, col int) [][]float64 {
+	n := len(a)
+	cpy := make([][]float64, n)
+	for i := range a {
+		cpy[i] = append([]float64{}, a[i]...)
+		cpy[i][col] = b[i]
+	}
+	return cpy
+}
+
+// 并行Cramer法则求解
+func parallelCramer(a [][]float64, b []float64) ([]float64, error) {
+	n := len(b)
+	if n == 0 || len(a) != n || len(a[0]) != n {
+		return nil, fmt.Errorf("无效的矩阵维度")
+	}
+
+	detA := determinant(a)
+	if math.Abs(detA) < 1e-9 {
+		return nil, fmt.Errorf("奇异矩阵 (行列式=%.4f)", detA)
+	}
+
+	x := make([]float64, n)
+	var wg sync.WaitGroup
+	wg.Add(n)
+	mutex := &sync.Mutex{}
+
+	for i := 0; i < n; i++ {
+		go func(col int) {
+			defer wg.Done()
+			modified := withReplacedColumn(a, b, col)
+			det := determinant(modified)
+			
+			mutex.Lock()
+			x[col] = det / detA
+			mutex.Unlock()
+		}(i)
+	}
+
+	wg.Wait()
+	return x, nil
+}
+
+func main() {
+	// 测试方程组 (解为 x=2, y=3, z=-1)
+	a := [][]float64{
+		{2.0, 1.0, -1.0},
+		{-3.0, -1.0, 2.0},
+		{-2.0, 1.0, 2.0},
+	}
+	b := []float64{8.0, -11.0, -3.0}
+
+	solution, err := parallelCramer(a, b)
+	if err != nil {
+		fmt.Println("错误:", err)
+		return
+	}
+
+	fmt.Printf("解:\n")
+	for i, val := range solution {
+		fmt.Printf("x%d = %.2f\n", i+1, val)
+	}
+}
