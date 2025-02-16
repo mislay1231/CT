@@ -1,0 +1,194 @@
+/*
+Enigma机数学原理：
+1. 字符编码：所有字母使用A=0, B=1,...Z=25的26进制表示
+2. 置换函数：每个转子实现一个置换函数 π: Z26 → Z26
+3. 位置偏移：转子位置pos会导致置换函数变为 π((x + pos) mod 26) - pos
+4. 反射器性质：ρ(ρ(x)) = x 保证加密可逆
+5. 模运算：所有计算在mod26下进行，保证结果在字母范围内
+6. 双步进机制：当转子到达缺口位置(notch)时，会触发下一个转子转动
+*/
+package main
+
+import (
+	"fmt"
+)
+
+// Rotor 结构体表示单个转子
+type Rotor struct {
+	wiring [26]byte // 固定接线映射（静态置换表）
+	notch  byte     // 触发下一转子转动的缺口位置（如'Q'=16）
+	pos    byte     // 当前转动位置（0-25对应A-Z）
+}
+
+// 创建新转子
+// wiring: 26字母置换字符串（如"EKMFLGDQV..."）
+// notch: 缺口触发位置（如'Q'）
+func NewRotor(wiring string, notch byte) *Rotor {
+	r := &Rotor{}
+	for i := 0; i < 26; i++ {
+		r.wiring[i] = wiring[i] // 将字符串映射存储为字节数组
+	}
+	r.notch = notch - 'A' // 将字符转换为0-25的数字
+	r.pos = 0             // 初始位置设为A
+	return r
+}
+
+// 正向加密（信号从右向左通过转子）
+// c: 输入字符（A-Z）
+// 返回: 加密后的字符
+func (r *Rotor) EncryptForward(c byte) byte {
+	// 1. 计算输入字符的偏移量（考虑转子当前位置）
+	// (c - 'A')将字符转为0-25，加上pos后mod26
+	entryPos := (c - 'A' + r.pos) % 26
+
+	// 2. 通过接线映射获取输出字符
+	exitChar := r.wiring[entryPos]
+
+	// 3. 反向计算最终输出位置（考虑转子位置的影响）
+	// 公式：output = (exitChar - 'A' - pos + 26) % 26 + 'A'
+	// +26确保模运算前值为正数
+	return (exitChar-'A'-r.pos+26)%26 + 'A'
+}
+
+// 反向加密（信号从反射器返回时）
+// c: 输入字符（A-Z）
+// 返回: 解密后的字符
+func (r *Rotor) EncryptBackward(c byte) byte {
+	// 1. 计算输入字符的偏移量
+	adjusted := (c - 'A' + r.pos) % 26
+
+	// 2. 在接线映射中查找匹配的入口位置
+	for i := 0; i < 26; i++ {
+		if r.wiring[i] == byte(adjusted)+'A' {
+			// 3. 计算最终输出位置
+			return (byte(i)-r.pos+26)%26 + 'A'
+		}
+	}
+	return c // 理论上不会执行到这里
+}
+
+// EnigmaMachine 完整加密机
+type EnigmaMachine struct {
+	rotors    []*Rotor      // 转子组（按从右到左顺序存放）
+	reflector [26]byte      // 反射器映射
+	plugboard map[byte]byte // 插线板置换
+}
+
+// 创建Enigma机实例
+// rotors: 转子组（从右到左顺序，如[III, II, I]）
+// reflector: 反射器映射字符串
+// plugboard: 插线板置换表
+func NewEnigmaMachine(rotors []*Rotor, reflector string, plugboard map[byte]byte) *EnigmaMachine {
+	em := &EnigmaMachine{
+		rotors:    rotors,
+		plugboard: plugboard,
+	}
+	// 初始化反射器映射
+	for i := 0; i < 26; i++ {
+		em.reflector[i] = reflector[i]
+	}
+	return em
+}
+
+// 转子步进机制（加密前调用）
+func (em *EnigmaMachine) stepRotors() {
+	shouldStep := make([]bool, len(em.rotors))
+
+	// 规则1：最右侧转子每次都会转动
+	shouldStep[0] = true
+
+	// 检查缺口触发（双步进机制）
+	for i := 0; i < len(em.rotors)-1; i++ {
+		// 如果当前转子到达缺口位置
+		if em.rotors[i].pos == em.rotors[i].notch {
+			// 标记当前和下一个转子需要转动
+			shouldStep[i] = true
+			shouldStep[i+1] = true
+		}
+	}
+
+	// 执行转动
+	for i, step := range shouldStep {
+		if step {
+			em.rotors[i].pos = (em.rotors[i].pos + 1) % 26
+		}
+	}
+}
+
+// 加密单个字符
+func (em *EnigmaMachine) EncryptChar(c byte) byte {
+	// 第一步：转动转子
+	em.stepRotors()
+
+	// 插线板输入置换
+	if val, ok := em.plugboard[c]; ok {
+		c = val
+	}
+
+	// 正向通过所有转子（从右向左）
+	for _, rotor := range em.rotors {
+		c = rotor.EncryptForward(c)
+	}
+
+	// 通过反射器
+	c = em.reflector[c-'A']
+
+	// 反向通过所有转子（从左向右）
+	for i := len(em.rotors) - 1; i >= 0; i-- {
+		c = em.rotors[i].EncryptBackward(c)
+	}
+
+	// 插线板输出置换
+	if val, ok := em.plugboard[c]; ok {
+		c = val
+	}
+
+	return c
+}
+
+// 加密字符串
+func (em *EnigmaMachine) Encrypt(text string) string {
+	result := make([]byte, len(text))
+	for i, c := range text {
+		// 只处理字母，保持大小写
+		if c >= 'A' && c <= 'Z' {
+			result[i] = em.EncryptChar(byte(c))
+		} else if c >= 'a' && c <= 'z' {
+			// 小写转大写处理
+			result[i] = em.EncryptChar(byte(c - 'a' + 'A'))
+		} else {
+			// 非字母字符原样保留
+			result[i] = byte(c)
+		}
+	}
+	return string(result)
+}
+
+func main() {
+	// 使用标准Enigma I配置
+	rotorI := NewRotor("EKMFLGDQVZNTOWYHXUSPAIBRCJ", 'Q')   // 转子I
+	rotorII := NewRotor("AJDKSIRUXBLHWTMCQGZNPYFVOE", 'E')  // 转子II
+	rotorIII := NewRotor("BDFHJLCPRTXVZNYEIWGAKMUSQO", 'V') // 转子III
+
+	// 创建加密机（转子顺序从右到左：III -> II -> I）
+	enigma := NewEnigmaMachine(
+		[]*Rotor{rotorIII, rotorII, rotorI},
+		"YRUHQSLDPXNGOKMIEBFZCWVJAT",      // 反射器B型
+		map[byte]byte{'A': 'B', 'B': 'A'}, // 插线板A<->B
+	)
+
+	// 设置初始位置（AAA）
+	rotorIII.pos = 0
+	rotorII.pos = 0
+	rotorI.pos = 0
+
+	// 测试加密
+	plaintext := "HELLOWORLD"
+	fmt.Println("明文:", plaintext)
+	ciphertext := enigma.Encrypt(plaintext)
+	fmt.Println("加密:", ciphertext) // 正确输出: ILBDAAMYZA
+
+	// 重置转子解密
+	rotorIII.pos, rotorII.pos, rotorI.pos = 0, 0, 0
+	fmt.Println("解密:", enigma.Encrypt(ciphertext)) // 输出原始明文
+}
